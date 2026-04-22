@@ -2,10 +2,13 @@
 
 __author__ = ["nennomp"]
 
+import os
+
 import pytest
 import torch
 import torch.nn as nn
 
+import pyaptamer.aptatrans._model as aptatrans_model
 from pyaptamer.aptatrans import AptaTrans, AptaTransPipeline, EncoderPredictorConfig
 
 
@@ -201,6 +204,50 @@ class TestAptaTransModel:
             f"Expected ({batch_size}, 1), got {tuple(output.shape)}. "
             f"seq_len_apta={seq_len_apta}, seq_len_prot={seq_len_prot}"
         )
+
+    def test_load_pretrained_weights_uses_module_relative_path(
+        self, embeddings, monkeypatch
+    ) -> None:
+        """Check pretrained weights paths stay anchored to the package directory."""
+        model = AptaTrans(
+            apta_embedding=embeddings[0],
+            prot_embedding=embeddings[1],
+            pretrained=False,
+        )
+        monkeypatch.chdir(os.path.dirname(__file__))
+
+        captured = {}
+        expected_path = os.path.join(
+            os.path.dirname(aptatrans_model.__file__), "weights", "pretrained.pt"
+        )
+        expected_model_dir = os.path.dirname(expected_path)
+
+        def fake_exists(path):
+            captured["exists_path"] = path
+            return False
+
+        def fake_load_state_dict_from_url(*, url, model_dir, map_location):
+            captured["url"] = url
+            captured["model_dir"] = model_dir
+            captured["map_location"] = map_location
+            return {}
+
+        monkeypatch.setattr(aptatrans_model.os.path, "exists", fake_exists)
+        monkeypatch.setattr(aptatrans_model.torch, "load", lambda *args, **kwargs: {})
+        monkeypatch.setattr(
+            aptatrans_model.torch.hub,
+            "load_state_dict_from_url",
+            fake_load_state_dict_from_url,
+        )
+        monkeypatch.setattr(
+            AptaTrans, "load_state_dict", lambda self, *args, **kwargs: None
+        )
+
+        model.load_pretrained_weights()
+
+        assert captured["exists_path"] == expected_path
+        assert os.path.isabs(captured["exists_path"])
+        assert captured["model_dir"] == expected_model_dir
 
 
 class MockAptaTransNeuralNet(nn.Module):
